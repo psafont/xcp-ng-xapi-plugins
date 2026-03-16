@@ -14,24 +14,26 @@ def _run(cmd):
     """Small helper to run a [cmd, ...] and get its decoded and stripped output."""
     return run_command(cmd)["stdout"].decode("utf-8").strip()
 
-def get_byid_paths_from_dev(devname):
-    """Return all generated links to a /dev/<devname> in /dev/disk/by-id/."""
-    return [
-        "/dev/" + path
-        for path in _run(["udevadm", "info", "-q", "symlink", "/dev/" + devname]).split()
-        if path.startswith("disk/by-id/")
-    ]
+def udev_export_db():
+    """Check udev database to extract a dict of {device_name: [list, of, symlinks], ...}."""
+    return {
+        re.search(r'N: (.*)', device).group(1):
+        sorted("/dev/" + path for path in re.findall(r'S: (disk/.*)', device))
+        for device in _run(["udevadm", "info", "--export-db"]).split("\n\n")
+        if "S: disk/" in device and "N: " in device
+    }
 
 @error_wrapped
 def list_block_devices(session, args):
     results = []
     blockdevices = {}
+    symlinks = udev_export_db()
     for output in _run(["lsblk", "-P", "-b", "-o", LSBLK_COLUMNS]).splitlines():
         device = {
             key.lower(): value.strip('"')
             for key, value in re.findall(r'(\S+)=(".*?"|\S+)', output)
         }
-        device["device-id-paths"] = get_byid_paths_from_dev(device["kname"])
+        device["device-id-paths"] = symlinks.get(device["kname"], [])
         if device["pkname"]:
             blockdevices[device["pkname"]].setdefault("children", []).append(device)
         else:
